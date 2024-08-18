@@ -25,25 +25,25 @@ const (
 )
 
 type Context struct {
-	chainID      *big.Int
-	sender       common.Address
-	origin       common.Address
-	feeRecipient common.Address
-	gasLimit     uint64
-	blockNum     uint64
-	timestamp    uint64
-	prevRandao   common.Hash
-	blobHashes   []common.Hash
+	ChainID      *big.Int
+	Sender       common.Address
+	Origin       common.Address
+	FeeRecipient common.Address
+	GasLimit     uint64
+	BlockNum     uint64
+	Timestamp    uint64
+	PrevRandao   common.Hash
+	BlobHashes   []common.Hash
 }
 
 var DefaultContext = Context{
-	chainID:      big.NewInt(1337),
-	sender:       DefaultSenderAddr,
-	origin:       DefaultSenderAddr,
-	feeRecipient: common.Address{},
-	gasLimit:     DefaultFoundryGasLimit,
-	blockNum:     0,
-	timestamp:    0,
-	prevRandao:   common.Hash{},
-	blobHashes:   []common.Hash{},
+	ChainID:      big.NewInt(1337),
+	Sender:       DefaultSenderAddr,
+	Origin:       DefaultSenderAddr,
+	FeeRecipient: common.Address{},
+	GasLimit:     DefaultFoundryGasLimit,
+	BlockNum:     0,
+	Timestamp:    0,
+	PrevRandao:   common.Hash{},
+	BlobHashes:   []common.Hash{},
 }

@@ -1,0 +1,346 @@
+package genz
+
+import (
+	"errors"
+	"fmt"
+	"math/big"
+
+	"github.com/holiman/uint256"
+
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/log"
+
+	"github.com/ethereum-optimism/optimism/op-chain-ops/foundry"
+	"github.com/ethereum-optimism/optimism/op-chain-ops/genesis"
+	"github.com/ethereum-optimism/optimism/op-chain-ops/script"
+)
+
+func Deploy(logger log.Logger, fa *foundry.ArtifactsFS, cfg *WorldConfig) (*WorldDeployment, *WorldOutput, error) {
+	// Sanity check all L2s have consistent chain ID and attach to the same L1
+	for id, l2Cfg := range cfg.L2s {
+		if !id.IsUint64() || l2Cfg.L2ChainID != id.Uint64() {
+			return nil, nil, fmt.Errorf("chain L2 %s declared different L2 chain ID %d in config", &id, l2Cfg.L2ChainID)
+		}
+		if !cfg.L1.ChainID.IsUint64() || cfg.L1.ChainID.Uint64() != l2Cfg.L1ChainID {
+			return nil, nil, fmt.Errorf("chain L2 %s declared different L1 chain ID %d in config than global %d", &id, l2Cfg.L1ChainID, cfg.L1.ChainID)
+		}
+	}
+
+	deployments := &WorldDeployment{
+		L2s: make(map[uint256.Int]*L2Deployment),
+	}
+
+	l1Host := createL1(logger, fa, cfg.L1)
+
+	l1Deployment, err := initialL1(l1Host)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to deploy initial L1 content: %w", err)
+	}
+	deployments.L1 = l1Deployment
+
+	superDeployment, err := deploySuperchainToL1(l1Host, cfg.Superchain)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to deploy superchain to L1: %w", err)
+	}
+	deployments.Superchain = superDeployment
+
+	for l2ChainID, l2Cfg := range cfg.L2s {
+		l2Deployment, err := deployL2ToL1(l1Host, superDeployment, l2Cfg)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to deploy L2 %d to L1: %w", &l2ChainID, err)
+		}
+		deployments.L2s[l2ChainID] = l2Deployment
+	}
+
+	out := &WorldOutput{
+		L2s: make(map[uint256.Int]*L2Output),
+	}
+	l1Out, err := completeL1(l1Host, cfg.L1)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to complete L1: %w", err)
+	}
+	out.L1 = l1Out
+
+	l1GenesisBlock := l1Out.Genesis.ToBlock()
+	genesisTimestamp := l1Out.Genesis.Timestamp
+
+	for l2ChainID, l2Cfg := range cfg.L2s {
+		l2Host := createL2(logger, fa, l2Cfg, genesisTimestamp)
+		if err := genesisL2(l2Host, l2Cfg, deployments.L2s[l2ChainID]); err != nil {
+			return nil, nil, fmt.Errorf("failed to apply genesis data to L2 %s: %w", &l2ChainID, err)
+		}
+		l2Out, err := completeL2(l2Host, l2Cfg, l1GenesisBlock, deployments.L2s[l2ChainID])
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to complete L2 %s: %w", &l2ChainID, err)
+		}
+		out.L2s[l2ChainID] = l2Out
+	}
+	return deployments, out, nil
+}
+
+func createL1(logger log.Logger, fa *foundry.ArtifactsFS, cfg *L1Config) *script.Host {
+	l1Context := script.Context{
+		ChainID:      cfg.ChainID,
+		Sender:       cfg.Deployer,
+		Origin:       cfg.Deployer,
+		FeeRecipient: common.Address{},
+		GasLimit:     script.DefaultFoundryGasLimit,
+		BlockNum:     uint64(cfg.L1GenesisBlockNumber),
+		Timestamp:    uint64(cfg.L1GenesisBlockTimestamp),
+		PrevRandao:   cfg.L1GenesisBlockMixHash,
+		BlobHashes:   nil,
+	}
+	l1Host := script.NewHost(logger.New("role", "l1", "chain", cfg.ChainID), fa, l1Context)
+	l1Host.SetEnvVar("DISABLE_DEPLOYMENT_REGISTRY", "true") // we override it with a precompile
+	return l1Host
+}
+
+func createL2(logger log.Logger, fa *foundry.ArtifactsFS, l2Cfg *L2Config, genesisTimestamp uint64) *script.Host {
+	l2Context := script.Context{
+		ChainID:      new(big.Int).SetUint64(l2Cfg.L2ChainID),
+		Sender:       l2Cfg.Deployer,
+		Origin:       l2Cfg.Deployer,
+		FeeRecipient: common.Address{},
+		GasLimit:     script.DefaultFoundryGasLimit,
+		BlockNum:     uint64(l2Cfg.L2GenesisBlockNumber),
+		Timestamp:    genesisTimestamp,
+		PrevRandao:   l2Cfg.L2GenesisBlockMixHash,
+		BlobHashes:   nil,
+	}
+	l2Host := script.NewHost(logger.New("role", "l2", "chain", l2Cfg.L2ChainID), fa, l2Context)
+	l2Host.SetEnvVar("DISABLE_DEPLOYMENT_REGISTRY", "true") // we override it with a precompile
+	return l2Host
+}
+
+// initialL1 deploys basics such as preinstalls to L1  (incl. EIP-4788)
+func initialL1(l1Host *script.Host) (*L1Deployment, error) {
+	// TODO set deployer
+	// Init L2Genesis script. Yes, this is L1. Hack to deploy all preinstalls.
+	l2GenesisScript, cleanupL2Genesis, err := WithScript[L2GenesisScript](l1Host, "L2Genesis.s.sol")
+	if err != nil {
+		return nil, fmt.Errorf("failed to load L2Genesis script for L1 preinstalls work: %w", err)
+	}
+	defer cleanupL2Genesis()
+	if err := l2GenesisScript.SetPreinstalls(); err != nil {
+		return nil, fmt.Errorf("failed to set preinstalls in L1: %w", err)
+	}
+	return &L1Deployment{
+		// any contracts we need to register here?
+	}, nil
+}
+
+func deploySuperchainToL1(l1Host *script.Host, superCfg *SuperchainConfig) (*SuperchainDeployment, error) {
+	// TODO set deployer
+
+	deploymentRegistry := &DeploymentRegistryPrecompile{
+		Deployments: map[string]common.Address{},
+	}
+	cleanupDeploymentRegistry, err := WithPrecompileAtAddress[*DeploymentRegistryPrecompile](
+		l1Host, deploymentRegistryAddr, deploymentRegistry)
+	if err != nil {
+		return nil, fmt.Errorf("failed to insert DeploymentRegistry precompile: %w", err)
+	}
+	defer cleanupDeploymentRegistry()
+
+	l1DeployScript, cleanupL1Deploy, err := WithScript[DeployScript](l1Host, "Deploy.s.sol")
+	if err != nil {
+		return nil, fmt.Errorf("failed to load Deploy script: %w", err)
+	}
+	defer cleanupL1Deploy()
+
+	deployConfig := &genesis.DeployConfig{}
+	deployConfig.ProxyAdminOwner = superCfg.ProxyAdminOwner
+	deployConfig.SuperchainL1DeployConfig = superCfg.SuperchainL1DeployConfig
+	cleanupDeployConfig, err := WithPrecompileAtAddress[*genesis.DeployConfig](l1Host, deployConfigAddr, deployConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to insert DeployConfig precompile: %w", err)
+	}
+	defer cleanupDeployConfig()
+
+	// Make deployments
+	l1DeployScript.DeployProxyAdmin()
+
+	l1DeployScript.DeployAddressManager()
+
+	l1DeployScript.DeploySuperchainConfig()
+	l1DeployScript.DeployERC1967Proxy("SuperchainConfigProxy")
+	l1DeployScript.InitializeSuperchainConfig()
+
+	l1DeployScript.DeployProtocolVersions()
+	l1DeployScript.DeployERC1967Proxy("ProtocolVersionsProxy")
+	l1DeployScript.InitializeProtocolVersions()
+
+	l1DeployScript.DeployImplementations()
+
+	// Collect deployment addresses
+	// This could all be automatic once we have better output-contract typing/scripting
+	return &SuperchainDeployment{
+		Implementations: Implementations{
+			L1CrossDomainMessenger:       deploymentRegistry.GetAddress("L1CrossDomainMessenger"),
+			L1ERC721Bridge:               deploymentRegistry.GetAddress("L1ERC721Bridge"),
+			L1StandardBridge:             deploymentRegistry.GetAddress("L1StandardBridge"),
+			L2OutputOracle:               deploymentRegistry.GetAddress("L2OutputOracle"),
+			OptimismMintableERC20Factory: deploymentRegistry.GetAddress("OptimismMintableERC20Factory"),
+			OptimismPortal:               deploymentRegistry.GetAddress("OptimismPortal"),
+			SystemConfig:                 deploymentRegistry.GetAddress("SystemConfig"),
+			DisputeGameFactory:           deploymentRegistry.GetAddress("DisputeGameFactory"),
+		},
+		SystemOwnerSafe:       deploymentRegistry.GetAddress("TODO"), // TODO
+		AddressManager:        deploymentRegistry.GetAddress("AddressManager"),
+		ProxyAdmin:            deploymentRegistry.GetAddress("ProxyAdmin"),
+		ProtocolVersions:      deploymentRegistry.GetAddress("ProtocolVersions"),
+		ProtocolVersionsProxy: deploymentRegistry.GetAddress("ProtocolVersionsProxy"),
+		SuperchainConfig:      deploymentRegistry.GetAddress("SuperchainConfig"),
+		SuperchainConfigProxy: deploymentRegistry.GetAddress("SuperchainConfigProxy"),
+	}, nil
+}
+
+func deployL2ToL1(l1Host *script.Host, superDeployment *SuperchainDeployment, cfg *L2Config) (*L2Deployment, error) {
+	if cfg.UseAltDA {
+		return nil, errors.New("alt-da mode not supported yet")
+	}
+
+	// TODO set L1 host msg.sender to l2Cfg.Deployer
+
+	deploymentRegistry := &DeploymentRegistryPrecompile{
+		Deployments: map[string]common.Address{
+			"L1CrossDomainMessenger":       superDeployment.L1CrossDomainMessenger,
+			"L1ERC721Bridge":               superDeployment.L1ERC721Bridge,
+			"L1StandardBridge":             superDeployment.L1StandardBridge,
+			"L2OutputOracle":               superDeployment.L2OutputOracle,
+			"OptimismMintableERC20Factory": superDeployment.OptimismMintableERC20Factory,
+			"OptimismPortal":               superDeployment.OptimismPortal,
+			"SystemConfig":                 superDeployment.SystemConfig,
+			"DisputeGameFactory":           superDeployment.DisputeGameFactory,
+		},
+	}
+	cleanupDeploymentRegistry, err := WithPrecompileAtAddress[*DeploymentRegistryPrecompile](
+		l1Host, deploymentRegistryAddr, deploymentRegistry)
+	if err != nil {
+		return nil, fmt.Errorf("failed to insert DeploymentRegistry precompile: %w", err)
+	}
+	defer cleanupDeploymentRegistry()
+
+	l1DeployScript, cleanupL1Deploy, err := WithScript[DeployScript](l1Host, "Deploy.s.sol")
+	if err != nil {
+		return nil, fmt.Errorf("failed to load Deploy script: %w", err)
+	}
+	defer cleanupL1Deploy()
+
+	deployConfig := &genesis.DeployConfig{
+		L2InitializationConfig:   cfg.L2InitializationConfig,
+		OutputOracleDeployConfig: cfg.OutputOracleDeployConfig,
+		FaultProofDeployConfig:   cfg.FaultProofDeployConfig,
+	}
+	cleanupDeployConfig, err := WithPrecompileAtAddress[*genesis.DeployConfig](l1Host, deployConfigAddr, deployConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to insert DeployConfig precompile: %w", err)
+	}
+	defer cleanupDeployConfig()
+
+	// Make deployments
+	l1DeployScript.DeployProxies()
+	l1DeployScript.InitializeImplementations()
+	// TODO fault proof deployment is more involved, need to make more calls...
+
+	// TODO fund the operating accounts of this L2 (proposer, batcher, challenger, etc.)
+
+	// Collect deployment addresses
+	return &L2Deployment{
+		L2Proxies: L2Proxies{
+			L1CrossDomainMessengerProxy:       deploymentRegistry.GetAddress("L1CrossDomainMessengerProxy"),
+			L1ERC721BridgeProxy:               deploymentRegistry.GetAddress("L1ERC721BridgeProxy"),
+			L1StandardBridgeProxy:             deploymentRegistry.GetAddress("L1StandardBridgeProxy"),
+			L2OutputOracleProxy:               deploymentRegistry.GetAddress("L2OutputOracleProxy"),
+			OptimismMintableERC20FactoryProxy: deploymentRegistry.GetAddress("OptimismMintableERC20FactoryProxy"),
+			OptimismPortalProxy:               deploymentRegistry.GetAddress("OptimismPortalProxy"),
+			SystemConfigProxy:                 deploymentRegistry.GetAddress("SystemConfigProxy"),
+			AnchorStateRegistryProxy:          deploymentRegistry.GetAddress("AnchorStateRegistryProxy"),
+			DelayedWETHProxy:                  deploymentRegistry.GetAddress("DelayedWETHProxy"),
+			DisputeGameFactoryProxy:           deploymentRegistry.GetAddress("DisputeGameFactoryProxy"),
+		},
+		ProxyAdmin:      deploymentRegistry.GetAddress("ProxyAdmin"),
+		SystemOwnerSafe: deploymentRegistry.GetAddress("SystemOwnerSafe"), // TODO
+	}, nil
+}
+
+func genesisL2(l2Host *script.Host, cfg *L2Config, deployment *L2Deployment) error {
+	deploymentRegistry := &DeploymentRegistryPrecompile{
+		Deployments: map[string]common.Address{
+			"L1CrossDomainMessengerProxy": deployment.L1CrossDomainMessengerProxy,
+			"L1StandardBridgeProxy":       deployment.L1StandardBridgeProxy,
+			"L1ERC721BridgeProxy":         deployment.L1ERC721BridgeProxy,
+		},
+	}
+	cleanupDeploymentRegistry, err := WithPrecompileAtAddress[*DeploymentRegistryPrecompile](
+		l2Host, deploymentRegistryAddr, deploymentRegistry)
+	if err != nil {
+		return fmt.Errorf("failed to insert DeploymentRegistry precompile: %w", err)
+	}
+	defer cleanupDeploymentRegistry()
+
+	deployConfig := &genesis.DeployConfig{
+		L2InitializationConfig: cfg.L2InitializationConfig,
+	}
+	cleanupDeployConfig, err := WithPrecompileAtAddress[*genesis.DeployConfig](l2Host, deployConfigAddr, deployConfig)
+	if err != nil {
+		return fmt.Errorf("failed to insert DeployConfig precompile: %w", err)
+	}
+	defer cleanupDeployConfig()
+
+	l2GenesisScript, cleanupL2Genesis, err := WithScript[L2GenesisScript](l2Host, "L2Genesis.s.sol")
+	if err != nil {
+		return fmt.Errorf("failed to load L2Genesis script: %w", err)
+	}
+	defer cleanupL2Genesis()
+
+	l2GenesisScript.RunWithAllUpgrades()
+	// TODO fund some accounts unique to this L2
+
+	return nil
+}
+
+func completeL1(l1Host *script.Host, cfg *L1Config) (*L1Output, error) {
+	l1Genesis, err := genesis.NewL1Genesis(&genesis.DeployConfig{DevL1DeployConfig: cfg.DevL1DeployConfig})
+	if err != nil {
+		return nil, fmt.Errorf("failed to build L1 genesis template: %w", err)
+	}
+	//l1Genesis.Alloc = l1Host.StateDump() // TODO
+	return &L1Output{
+		Genesis: l1Genesis,
+	}, nil
+}
+
+func completeL2(l2Host *script.Host, cfg *L2Config, l1Block *types.Block, deployment *L2Deployment) (*L2Output, error) {
+	deployCfg := &genesis.DeployConfig{
+		L2InitializationConfig: cfg.L2InitializationConfig,
+		L1DependenciesConfig: genesis.L1DependenciesConfig{
+			L1StandardBridgeProxy:       deployment.L1StandardBridgeProxy,
+			L1CrossDomainMessengerProxy: deployment.L1CrossDomainMessengerProxy,
+			L1ERC721BridgeProxy:         deployment.L1ERC721BridgeProxy,
+			SystemConfigProxy:           deployment.SystemConfigProxy,
+			OptimismPortalProxy:         deployment.OptimismPortalProxy,
+			DAChallengeProxy:            common.Address{}, // unsupported for now
+		},
+	}
+	// l1Block is used to determine genesis time.
+	// TODO simplify this, no need for full block here
+	l2Genesis, err := genesis.NewL2Genesis(deployCfg, l1Block)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build L2 genesis config: %w", err)
+	}
+	// TODO
+	//l2Genesis.Alloc = l2Host.StateDump()
+
+	l2GenesisBlock := l2Genesis.ToBlock()
+
+	rollupCfg, err := deployCfg.RollupConfig(l1Block, l2GenesisBlock.Hash(), l2GenesisBlock.NumberU64())
+	if err != nil {
+		return nil, fmt.Errorf("failed to build L2 rollup config: %w", err)
+	}
+	return &L2Output{
+		Genesis:   l2Genesis,
+		RollupCfg: rollupCfg,
+	}, nil
+}

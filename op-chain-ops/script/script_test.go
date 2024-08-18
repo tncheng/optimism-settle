@@ -27,7 +27,7 @@ func TestScript(t *testing.T) {
 
 	h.SetEnvVar("EXAMPLE_BOOL", "true")
 	input := bytes4("run()")
-	returnData, _, err := h.Call(scriptContext.sender, addr, input[:], DefaultFoundryGasLimit, uint256.NewInt(0))
+	returnData, _, err := h.Call(scriptContext.Sender, addr, input[:], DefaultFoundryGasLimit, uint256.NewInt(0))
 	require.NoError(t, err, "call failed: %x", string(returnData))
 	require.NotNil(t, captLog.FindLog(
 		testlog.NewAttributesFilter("p0", "sender nonce"),

@@ -21,66 +21,43 @@ fi
 
 mkdir ".devnet-interop"
 
-# generate L1 allocs with dev-allocs (incl. accounts for chain A and B proposer/batcher!)
-cd ./packages/contracts-bedrock && \
-  DEPLOYMENT_OUTFILE="../../.devnet-interop/deployments-l1-dev.json" \
-  DEPLOY_CONFIG_PATH="../../interop-devnet/deploy-config-l1-dev.json" \
-  ALLOCS_OUTPUT_PATH="../../.devnet-interop/allocs-l1-dev.json" \
-  forge script "./scripts/deploy/InteropDeploy.s.sol:InteropDeploy" \
-    --sig "initialL1()" \
-    --sender "0x90F79bf6EB2c4f870365E785982E1f101E93b906"
+export CONTRACTS_ARTIFACTS_DIR="../packages/contracts-bedrock"
 
-# deploy superchain to L1
-cd ./packages/contracts-bedrock && \
-  DEPLOYMENT_OUTFILE="../../.devnet-interop/deployments-l1-superchain.json" \
-  DEPLOY_CONFIG_PATH="../../interop-devnet/deploy-config-superchain.json" \
-  ALLOCS_INPUT_PATH="../../.devnet-interop/allocs-l1-dev.json" \
-  ALLOCS_OUTPUT_PATH="../../.devnet-interop/allocs-l1-superchain.json" \
-  forge script "./scripts/deploy/InteropDeploy.s.sol:InteropDeploy" \
-    --sig "superchainL1()" \
-    --sender "0x90F79bf6EB2c4f870365E785982E1f101E93b906"
+cd "../.devnet-interop/"
 
-# deploy L1-contracts A
-cd ./packages/contracts-bedrock && \
-  DEPLOYMENT_OUTFILE="../../.devnet-interop/deployments-l1-a.json" \
-  DEPLOY_CONFIG_PATH="../../interop-devnet/deploy-config-l2-a.json" \
-  ALLOCS_INPUT_PATH="../../.devnet-interop/allocs-l1-superchain.json" \
-  ALLOCS_OUTPUT_PATH="../../.devnet-interop/allocs-l1-superchain-and-l2-a.json" \
-  forge script "./scripts/deploy/InteropDeploy.s.sol:InteropDeploy" \
-    --sig "deployL2()" \
-    --sender "0x90F79bf6EB2c4f870365E785982E1f101E93b906"
+# deploy/     -- read only
+#   l1/
+#     dev.toml
+#   superchain/
+#     dev.toml
+#   l2/
+#     a.toml
+#     b.toml
+# out/
+#   l1/
+#     dev/
+#       l1-addresses.json
+#       genesis.json
+#       meta.json
+#   superchain/
+#     dev/
+#       l1-addresses.json
+#       meta.json
+#   l2/
+#     a/
+#       l1-addresses.json
+#       rollup.json
+#       genesis.json
+#       meta.json
+#     b/
+#       l1-addresses.json
+#       rollup.json
+#       genesis.json
+#       meta.json
 
-# deploy L1-contracts B
-cd ./packages/contracts-bedrock && \
-  DEPLOYMENT_OUTFILE="../../.devnet-interop/deployments-l1-b.json" \
-  DEPLOY_CONFIG_PATH="../../interop-devnet/deploy-config-l2-b.json" \
-  ALLOCS_INPUT_PATH="../../.devnet-interop/allocs-l1-superchain-and-l2-a.json" \
-  ALLOCS_OUTPUT_PATH="../../.devnet-interop/allocs-l1-complete.json" \
-  forge script "./scripts/deploy/InteropDeploy.s.sol:InteropDeploy" \
-    --sig "deployL2()" \
-    --sender "0x90F79bf6EB2c4f870365E785982E1f101E93b906"
+go run ../op-node dev
 
-# create L2 A allocs
-cd ./packages/contracts-bedrock && \
-  CONTRACT_ADDRESSES_PATH="../../.devnet-interop/deployments-l1-a.json" \
-  DEPLOY_CONFIG_PATH="../../interop-devnet/deploy-config-l2-a.json" \
-  forge script "./scripts/L2Genesis.s.sol:L2Genesis" --sig "runWithAllUpgrades()"
-
-# create L2 B allocs
-cd ./packages/contracts-bedrock && \
-  CONTRACT_ADDRESSES_PATH="../../.devnet-interop/deployments-l1-b.json" \
-  DEPLOY_CONFIG_PATH="../../interop-devnet/deploy-config-l2-b.json" \
-  forge script "./scripts/L2Genesis.s.sol:L2Genesis" --sig "runWithAllUpgrades()"
-
-# create L1 EL genesis
-# TODO this is all kinds of broken; fix l1-deployments dependency
-#go run ./op-node/cmd genesis l1 \
-#  --deploy-config paths.devnet_config_path \
-#  --l1-allocs paths.allocs_l1_path \
-#  --l1-deployments paths.addresses_json_path \
-#  --outfile.l1 paths.genesis_l1_path
-
-# create L2 CL genesis
+# create L1 CL genesis
 eth2-testnet-genesis deneb \
   --config=./beacon-data/config.yaml \
   --preset-phase0=minimal \
@@ -88,9 +65,9 @@ eth2-testnet-genesis deneb \
   --preset-bellatrix=minimal \
   --preset-capella=minimal \
   --preset-deneb=minimal \
-  --eth1-config=../.devnet-interop/genesis-l1.json \
-  --state-output=../.devnet-interop/genesis-l1.ssz \
-  --tranches-dir=../.devnet-interop/tranches \
+  --eth1-config=../.devnet-interop/out/l1/genesis.json \
+  --state-output=../.devnet-interop/out/l1/beaconstate.ssz \
+  --tranches-dir=../.devnet-interop/out/l1/tranches \
   --mnemonics=mnemonics.yaml \
   --eth1-withdrawal-address=0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
   --eth1-match-genesis-time

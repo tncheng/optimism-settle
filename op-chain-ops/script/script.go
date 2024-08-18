@@ -91,7 +91,7 @@ func NewHost(logger log.Logger, fs *foundry.ArtifactsFS, executionContext Contex
 
 	// Init a default chain config, with all the mainnet L1 forks activated
 	h.chainCfg = &params.ChainConfig{
-		ChainID: executionContext.chainID,
+		ChainID: executionContext.ChainID,
 		// Ethereum forks in proof-of-work era.
 		HomesteadBlock:      big.NewInt(0),
 		EIP150Block:         big.NewInt(0),
@@ -149,22 +149,22 @@ func NewHost(logger log.Logger, fs *foundry.ArtifactsFS, executionContext Contex
 			return crypto.Keccak256Hash(out[:])
 		},
 		L1CostFunc:  nil,
-		Coinbase:    executionContext.feeRecipient,
-		GasLimit:    executionContext.gasLimit,
-		BlockNumber: new(big.Int).SetUint64(executionContext.blockNum),
-		Time:        executionContext.timestamp,
+		Coinbase:    executionContext.FeeRecipient,
+		GasLimit:    executionContext.GasLimit,
+		BlockNumber: new(big.Int).SetUint64(executionContext.BlockNum),
+		Time:        executionContext.Timestamp,
 		Difficulty:  nil, // not used anymore post-merge
 		BaseFee:     big.NewInt(0),
 		BlobBaseFee: big.NewInt(0),
-		Random:      &executionContext.prevRandao,
+		Random:      &executionContext.PrevRandao,
 	}
 
 	// Initialize a transaction-context for the EVM to access environment variables.
 	// The transaction context (after embedding inside of the EVM environment) may be mutated later.
 	txContext := vm.TxContext{
-		Origin:       executionContext.origin,
+		Origin:       executionContext.Origin,
 		GasPrice:     big.NewInt(0),
-		BlobHashes:   executionContext.blobHashes,
+		BlobHashes:   executionContext.BlobHashes,
 		BlobFeeCap:   big.NewInt(0),
 		AccessEvents: state.NewAccessEvents(h.stateDB.PointCache()),
 	}

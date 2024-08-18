@@ -276,6 +276,16 @@ contract Deploy is Deployer {
     function runWithStateDump() public {
         vm.chainId(cfg.l1ChainID());
         _run();
+
+        vm.etch(address(cfg), "");
+        vm.etch(address(deploymentRegistry), "");
+        vm.etch(msg.sender, "");
+        vm.resetNonce(msg.sender);
+        vm.deal(msg.sender, 0);
+
+//        vm.deal(deployer, 0);
+//        vm.resetNonce(deployer);
+
         vm.dumpState(Config.stateDumpPath(""));
     }
 
