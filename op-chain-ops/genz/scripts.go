@@ -1,11 +1,5 @@
 package genz
 
-import (
-	"errors"
-
-	"github.com/ethereum-optimism/optimism/op-chain-ops/script"
-)
-
 type DeployScript struct {
 	DeploySafe func(name string)
 
@@ -37,16 +31,4 @@ type DeployScript struct {
 type L2GenesisScript struct {
 	RunWithAllUpgrades func() error
 	SetPreinstalls     func() error
-}
-
-func WithScript[B any](h *script.Host, name string) (b *B, cleanup func(), err error) {
-	// TODO
-	// load contract artifact
-	// init bindings (with ABI check)
-	// create tmp addr
-	// set tmp addr to script bytecode
-	// run setUp of script
-	// fn(bindingS)
-	// remove script
-	return nil, nil, errors.New("TODO")
 }

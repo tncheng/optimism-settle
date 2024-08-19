@@ -67,6 +67,8 @@ type Host struct {
 	cheatcodes *Precompile[*CheatCodesPrecompile]
 	console    *Precompile[*ConsolePrecompile]
 
+	precompiles map[common.Address]vm.PrecompiledContract
+
 	callStack []CallFrame
 
 	// serializerStates are in-progress JSON payloads by name,
@@ -251,7 +253,35 @@ func (h *Host) getPrecompile(rules params.Rules, original vm.PrecompiledContract
 	case ConsoleAddr:
 		return h.console // nil if cheats are not enabled
 	default:
+		if p, ok := h.precompiles[addr]; ok {
+			return p
+		}
 		return original
+	}
+}
+
+// SetPrecompile inserts a precompile at the given address.
+// If the precompile is nil, it removes the precompile override from that address, if any.
+func (h *Host) SetPrecompile(addr common.Address, precompile vm.PrecompiledContract) {
+	if precompile == nil {
+		delete(h.precompiles, addr)
+		h.state.SelfDestruct(addr)
+		return
+	}
+	h.precompiles[addr] = precompile
+	// insert non-empty placeholder bytecode, so EXTCODESIZE checks pass
+	h.state.SetCode(addr, []byte{0})
+}
+
+func (h *Host) HasPrecompileOverride(addr common.Address) bool {
+	switch addr {
+	case VMAddr:
+		return h.cheatcodes != nil
+	case ConsoleAddr:
+		return h.console != nil
+	default:
+		_, ok := h.precompiles[addr]
+		return ok
 	}
 }
 
@@ -313,7 +343,7 @@ func (h *Host) onOpcode(pc uint64, op byte, gas, cost uint64, scope tracing.OpCo
 		// apply prank, if parent call-frame set up a prank
 		if len(h.callStack) > 1 {
 			parentCallFrame := h.callStack[len(h.callStack)-2]
-			if parentCallFrame.Prank != nil {
+			if parentCallFrame.Prank != nil && scope.Address() != VMAddr { // pranks do not apply to the cheatcode precompile
 				if parentCallFrame.Prank.Sender != nil {
 					scopeCtx.Contract.CallerAddress = *parentCallFrame.Prank.Sender
 				}
@@ -490,5 +520,21 @@ func (h *Host) StateDump() (*foundry.ForgeAllocs, error) {
 	// because solidity checks if the code exists prior to regular EVM-calls to it.
 	delete(allocs.Accounts, VMAddr)
 
+	// Precompile overrides come with temporary state account placeholders. Ignore those.
+	for addr := range h.precompiles {
+		delete(allocs.Accounts, addr)
+	}
+
 	return &allocs, nil
+}
+
+func (h *Host) SetTxOrigin(addr common.Address) {
+	h.env.TxContext.Origin = addr
+}
+
+func (h *Host) ScriptBackendFn(to common.Address) CallBackendFn {
+	return func(data []byte) ([]byte, error) {
+		ret, _, err := h.Call(h.env.TxContext.Origin, to, data, DefaultFoundryGasLimit, uint256.NewInt(0))
+		return ret, err
+	}
 }

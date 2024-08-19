@@ -117,7 +117,7 @@ func createL2(logger log.Logger, fa *foundry.ArtifactsFS, l2Cfg *L2Config, genes
 func initialL1(l1Host *script.Host) (*L1Deployment, error) {
 	// TODO set deployer
 	// Init L2Genesis script. Yes, this is L1. Hack to deploy all preinstalls.
-	l2GenesisScript, cleanupL2Genesis, err := WithScript[L2GenesisScript](l1Host, "L2Genesis.s.sol")
+	l2GenesisScript, cleanupL2Genesis, err := script.WithScript[L2GenesisScript](l1Host, "L2Genesis.s.sol", "L2Genesis")
 	if err != nil {
 		return nil, fmt.Errorf("failed to load L2Genesis script for L1 preinstalls work: %w", err)
 	}
@@ -136,14 +136,14 @@ func deploySuperchainToL1(l1Host *script.Host, superCfg *SuperchainConfig) (*Sup
 	deploymentRegistry := &DeploymentRegistryPrecompile{
 		Deployments: map[string]common.Address{},
 	}
-	cleanupDeploymentRegistry, err := WithPrecompileAtAddress[*DeploymentRegistryPrecompile](
+	cleanupDeploymentRegistry, err := script.WithPrecompileAtAddress[*DeploymentRegistryPrecompile](
 		l1Host, deploymentRegistryAddr, deploymentRegistry)
 	if err != nil {
 		return nil, fmt.Errorf("failed to insert DeploymentRegistry precompile: %w", err)
 	}
 	defer cleanupDeploymentRegistry()
 
-	l1DeployScript, cleanupL1Deploy, err := WithScript[DeployScript](l1Host, "Deploy.s.sol")
+	l1DeployScript, cleanupL1Deploy, err := script.WithScript[DeployScript](l1Host, "Deploy.s.sol", "Deploy")
 	if err != nil {
 		return nil, fmt.Errorf("failed to load Deploy script: %w", err)
 	}
@@ -152,7 +152,7 @@ func deploySuperchainToL1(l1Host *script.Host, superCfg *SuperchainConfig) (*Sup
 	deployConfig := &genesis.DeployConfig{}
 	deployConfig.ProxyAdminOwner = superCfg.ProxyAdminOwner
 	deployConfig.SuperchainL1DeployConfig = superCfg.SuperchainL1DeployConfig
-	cleanupDeployConfig, err := WithPrecompileAtAddress[*genesis.DeployConfig](l1Host, deployConfigAddr, deployConfig)
+	cleanupDeployConfig, err := script.WithPrecompileAtAddress[*genesis.DeployConfig](l1Host, deployConfigAddr, deployConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to insert DeployConfig precompile: %w", err)
 	}
@@ -215,14 +215,14 @@ func deployL2ToL1(l1Host *script.Host, superDeployment *SuperchainDeployment, cf
 			"DisputeGameFactory":           superDeployment.DisputeGameFactory,
 		},
 	}
-	cleanupDeploymentRegistry, err := WithPrecompileAtAddress[*DeploymentRegistryPrecompile](
+	cleanupDeploymentRegistry, err := script.WithPrecompileAtAddress[*DeploymentRegistryPrecompile](
 		l1Host, deploymentRegistryAddr, deploymentRegistry)
 	if err != nil {
 		return nil, fmt.Errorf("failed to insert DeploymentRegistry precompile: %w", err)
 	}
 	defer cleanupDeploymentRegistry()
 
-	l1DeployScript, cleanupL1Deploy, err := WithScript[DeployScript](l1Host, "Deploy.s.sol")
+	l1DeployScript, cleanupL1Deploy, err := script.WithScript[DeployScript](l1Host, "Deploy.s.sol", "Deploy")
 	if err != nil {
 		return nil, fmt.Errorf("failed to load Deploy script: %w", err)
 	}
@@ -233,7 +233,7 @@ func deployL2ToL1(l1Host *script.Host, superDeployment *SuperchainDeployment, cf
 		OutputOracleDeployConfig: cfg.OutputOracleDeployConfig,
 		FaultProofDeployConfig:   cfg.FaultProofDeployConfig,
 	}
-	cleanupDeployConfig, err := WithPrecompileAtAddress[*genesis.DeployConfig](l1Host, deployConfigAddr, deployConfig)
+	cleanupDeployConfig, err := script.WithPrecompileAtAddress[*genesis.DeployConfig](l1Host, deployConfigAddr, deployConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to insert DeployConfig precompile: %w", err)
 	}
@@ -273,7 +273,7 @@ func genesisL2(l2Host *script.Host, cfg *L2Config, deployment *L2Deployment) err
 			"L1ERC721BridgeProxy":         deployment.L1ERC721BridgeProxy,
 		},
 	}
-	cleanupDeploymentRegistry, err := WithPrecompileAtAddress[*DeploymentRegistryPrecompile](
+	cleanupDeploymentRegistry, err := script.WithPrecompileAtAddress[*DeploymentRegistryPrecompile](
 		l2Host, deploymentRegistryAddr, deploymentRegistry)
 	if err != nil {
 		return fmt.Errorf("failed to insert DeploymentRegistry precompile: %w", err)
@@ -283,13 +283,13 @@ func genesisL2(l2Host *script.Host, cfg *L2Config, deployment *L2Deployment) err
 	deployConfig := &genesis.DeployConfig{
 		L2InitializationConfig: cfg.L2InitializationConfig,
 	}
-	cleanupDeployConfig, err := WithPrecompileAtAddress[*genesis.DeployConfig](l2Host, deployConfigAddr, deployConfig)
+	cleanupDeployConfig, err := script.WithPrecompileAtAddress[*genesis.DeployConfig](l2Host, deployConfigAddr, deployConfig)
 	if err != nil {
 		return fmt.Errorf("failed to insert DeployConfig precompile: %w", err)
 	}
 	defer cleanupDeployConfig()
 
-	l2GenesisScript, cleanupL2Genesis, err := WithScript[L2GenesisScript](l2Host, "L2Genesis.s.sol")
+	l2GenesisScript, cleanupL2Genesis, err := script.WithScript[L2GenesisScript](l2Host, "L2Genesis.s.sol", "L2Genesis")
 	if err != nil {
 		return fmt.Errorf("failed to load L2Genesis script: %w", err)
 	}
