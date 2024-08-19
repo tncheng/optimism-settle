@@ -466,3 +466,29 @@ func (h *Host) GetEnvVar(key string) (value string, ok bool) {
 func (h *Host) SetEnvVar(key string, value string) {
 	h.envVars[key] = value
 }
+
+func (h *Host) StateDump() (*foundry.ForgeAllocs, error) {
+	// We have to commit the existing state to the trie,
+	// for all the state-changes to be captured by the trie iterator.
+	root, err := h.state.Commit(h.env.Context.BlockNumber.Uint64(), true)
+	if err != nil {
+		return nil, fmt.Errorf("failed to commit state: %w", err)
+	}
+	// We need a state object around the state DB
+	st, err := state.New(root, h.stateDB, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create state object for state-dumping: %w", err)
+	}
+	// After Commit we cannot reuse the old State, so we update the host to use the new one
+	h.state = st
+	h.env.StateDB = st
+
+	var allocs foundry.ForgeAllocs
+	allocs.FromState(st)
+
+	// The cheatcodes VM has a placeholder bytecode,
+	// because solidity checks if the code exists prior to regular EVM-calls to it.
+	delete(allocs.Accounts, VMAddr)
+
+	return &allocs, nil
+}

@@ -306,7 +306,11 @@ func completeL1(l1Host *script.Host, cfg *L1Config) (*L1Output, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to build L1 genesis template: %w", err)
 	}
-	//l1Genesis.Alloc = l1Host.StateDump() // TODO
+	allocs, err := l1Host.StateDump()
+	if err != nil {
+		return nil, fmt.Errorf("failed to dump L1 state: %w", err)
+	}
+	l1Genesis.Alloc = allocs.Accounts
 	return &L1Output{
 		Genesis: l1Genesis,
 	}, nil
@@ -325,13 +329,16 @@ func completeL2(l2Host *script.Host, cfg *L2Config, l1Block *types.Block, deploy
 		},
 	}
 	// l1Block is used to determine genesis time.
-	// TODO simplify this, no need for full block here
 	l2Genesis, err := genesis.NewL2Genesis(deployCfg, l1Block)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build L2 genesis config: %w", err)
 	}
-	// TODO
-	//l2Genesis.Alloc = l2Host.StateDump()
+
+	allocs, err := l2Host.StateDump()
+	if err != nil {
+		return nil, fmt.Errorf("failed to dump L1 state: %w", err)
+	}
+	l2Genesis.Alloc = allocs.Accounts
 
 	l2GenesisBlock := l2Genesis.ToBlock()
 
