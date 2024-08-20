@@ -279,12 +279,7 @@ contract Deploy is Deployer {
 
         vm.etch(address(cfg), "");
         vm.etch(address(deploymentRegistry), "");
-        vm.etch(msg.sender, "");
-        vm.resetNonce(msg.sender);
-        vm.deal(msg.sender, 0);
-
-//        vm.deal(deployer, 0);
-//        vm.resetNonce(deployer);
+        // deployer/sender removal is handled by the state-dump cheatcode
 
         vm.dumpState(Config.stateDumpPath(""));
     }
