@@ -236,13 +236,29 @@ func (h *Host) LoadContract(artifactName, contractName string) (common.Address, 
 	if err != nil {
 		return common.Address{}, fmt.Errorf("failed to load %s / %s: %w", artifactName, contractName, err)
 	}
-	h.prelude(h.env.TxContext.Origin, nil)
-	ret, addr, _, err := h.env.Create(vm.AccountRef(h.env.TxContext.Origin),
-		artifact.Bytecode.Object, DefaultFoundryGasLimit, uint256.NewInt(0))
+	return h.Create(h.TxOrigin(), artifact.Bytecode.Object)
+}
+
+// Create a contract with unlimited gas, and 0 ETH value.
+// This create function helps deploy contracts quickly for scripting etc.
+func (h *Host) Create(from common.Address, initCode []byte) (common.Address, error) {
+	h.prelude(from, nil)
+	ret, addr, _, err := h.env.Create(vm.AccountRef(from),
+		initCode, DefaultFoundryGasLimit, uint256.NewInt(0))
 	if err != nil {
 		return common.Address{}, fmt.Errorf("failed to create contract, return: %x, err: %w", ret, err)
 	}
 	return addr, nil
+}
+
+// Wipe an account: removing the code, and setting address and balance to 0. This makes the account "empty".
+// Note that storage is not removed.
+func (h *Host) Wipe(addr common.Address) {
+	if h.state.GetCodeSize(addr) > 0 {
+		h.state.SetCode(addr, nil)
+	}
+	h.state.SetNonce(addr, 0)
+	h.state.SetBalance(addr, uint256.NewInt(0), tracing.BalanceChangeUnspecified)
 }
 
 // getPrecompile overrides any accounts during runtime, to insert special precompiles, if activated.
@@ -261,11 +277,11 @@ func (h *Host) getPrecompile(rules params.Rules, original vm.PrecompiledContract
 }
 
 // SetPrecompile inserts a precompile at the given address.
-// If the precompile is nil, it removes the precompile override from that address, if any.
+// If the precompile is nil, it removes the precompile override from that address, and wipes the account.
 func (h *Host) SetPrecompile(addr common.Address, precompile vm.PrecompiledContract) {
 	if precompile == nil {
 		delete(h.precompiles, addr)
-		h.state.SelfDestruct(addr)
+		h.Wipe(addr)
 		return
 	}
 	h.precompiles[addr] = precompile
@@ -516,6 +532,17 @@ func (h *Host) StateDump() (*foundry.ForgeAllocs, error) {
 	var allocs foundry.ForgeAllocs
 	allocs.FromState(st)
 
+	// Sanity check we have no lingering scripts.
+	for i := uint64(0); i <= allocs.Accounts[ScriptDeployer].Nonce; i++ {
+		scriptAddr := crypto.CreateAddress(ScriptDeployer, i)
+		if _, ok := allocs.Accounts[scriptAddr]; ok {
+			return nil, fmt.Errorf("script %s (deployed with nonce %d) was not cleaned up", scriptAddr, i)
+		}
+	}
+
+	// Remove the script deployer from the output
+	delete(allocs.Accounts, ScriptDeployer)
+
 	// The cheatcodes VM has a placeholder bytecode,
 	// because solidity checks if the code exists prior to regular EVM-calls to it.
 	delete(allocs.Accounts, VMAddr)
@@ -530,6 +557,10 @@ func (h *Host) StateDump() (*foundry.ForgeAllocs, error) {
 
 func (h *Host) SetTxOrigin(addr common.Address) {
 	h.env.TxContext.Origin = addr
+}
+
+func (h *Host) TxOrigin() common.Address {
+	return h.env.TxContext.Origin
 }
 
 func (h *Host) ScriptBackendFn(to common.Address) CallBackendFn {

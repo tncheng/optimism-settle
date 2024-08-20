@@ -1,31 +1,25 @@
 package genz
 
 type DeployScript struct {
-	DeploySafe func(name string)
+	DeploySafe func(name string) error
 
 	// setupSuperchain
-	DeployAddressManager        func()
-	DeployProxyAdmin            func()
-	TransferProxyAdminOwnership func()
-	DeploySuperchainConfig      func()
-	InitializeSuperchainConfig  func()
-	DeployERC1967Proxy          func(name string)
-	DeployProtocolVersions      func()
-	InitializeProtocolVersions  func()
+	SetupSuperchain func() error
 
 	// technically still part of setupOpChain, but we deploy them once, and share them, OPSM style.
-	DeployImplementations func()
+	DeployImplementations func() error
 
 	// setupOpChain
-	DeployProxies             func()
-	InitializeImplementations func()
+	DeployProxies             func() error
+	InitializeImplementations func() error
 
-	SetAlphabetFaultGameImplementation           func(allowUpgrade bool)
-	SetFastFaultGameImplementation               func(allowUpgrade bool)
-	SetCannonFaultGameImplementation             func(allowUpgrade bool)
-	SetPermissionedCannonFaultGameImplementation func(allowUpgrade bool)
-	TransferDisputeGameFactoryOwnership          func()
-	TransferDelayedWETHOwnership                 func()
+	// FP functions
+	SetAlphabetFaultGameImplementation           func(allowUpgrade bool) error
+	SetFastFaultGameImplementation               func(allowUpgrade bool) error
+	SetCannonFaultGameImplementation             func(allowUpgrade bool) error
+	SetPermissionedCannonFaultGameImplementation func(allowUpgrade bool) error
+	TransferDisputeGameFactoryOwnership          func() error
+	TransferDelayedWETHOwnership                 func() error
 }
 
 type L2GenesisScript struct {

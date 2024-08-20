@@ -17,6 +17,8 @@ var (
 	// ConsoleAddr is known as CONSOLE, "console.log" in ascii.
 	// Utils like console.sol and console2.sol work by executing a staticcall to this address.
 	ConsoleAddr = common.HexToAddress("0x000000000000000000636F6e736F6c652e6c6f67")
+	// ScriptDeployer is used for temporary scripts address(uint160(uint256(keccak256("op-stack script deployer"))))
+	ScriptDeployer = common.HexToAddress("0x76Ce131128F3616871f8CDA86d18fAB44E4d0D8B")
 )
 
 const (

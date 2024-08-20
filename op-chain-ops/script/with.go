@@ -1,11 +1,11 @@
 package script
 
 import (
-	"errors"
 	"fmt"
 
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/crypto"
 )
 
 func checkABI(abiData *abi.ABI, methodSignature string) bool {
@@ -17,6 +17,8 @@ func checkABI(abiData *abi.ABI, methodSignature string) bool {
 	return false
 }
 
+// WithScript deploys a script contract, at a create-address based on the ScriptDeployer.
+// The returned cleanup function wipes the script account again (but not the storage).
 func WithScript[B any](h *Host, name string, contract string) (b *B, cleanup func(), err error) {
 	// load contract artifact
 	artifact, err := h.af.ReadArtifact(name, contract)
@@ -24,8 +26,10 @@ func WithScript[B any](h *Host, name string, contract string) (b *B, cleanup fun
 		return nil, nil, fmt.Errorf("could not load script artifact: %w", err)
 	}
 
-	// TODO compute address of script contract to be deployed
-	addr := common.Address{}
+	deployer := ScriptDeployer
+	deployNonce := h.state.GetNonce(deployer)
+	// compute address of script contract to be deployed
+	addr := crypto.CreateAddress(deployer, deployNonce)
 
 	// init bindings (with ABI check)
 	bindings, err := MakeBindings[B](h.ScriptBackendFn(addr), func(abiDef string) bool {
@@ -35,10 +39,17 @@ func WithScript[B any](h *Host, name string, contract string) (b *B, cleanup fun
 		return nil, nil, fmt.Errorf("failed to make bindings: %w", err)
 	}
 
-	// TODO deploy the script contract
-
-	// TODO cleanup func to remove script contract
-	return bindings, nil, errors.New("TODO")
+	// deploy the script contract
+	deployedAddr, err := h.Create(deployer, artifact.Bytecode.Object)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to deploy script: %w", err)
+	}
+	if deployedAddr != addr {
+		return nil, nil, fmt.Errorf("deployed to unexpected address %s, expected %s", deployedAddr, addr)
+	}
+	return bindings, func() {
+		h.Wipe(addr)
+	}, nil
 }
 
 // WithPrecompileAtAddress turns a struct into a precompile,

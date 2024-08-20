@@ -26,7 +26,7 @@ type SuperchainConfig struct {
 }
 
 type L2Config struct {
-	Deployer common.Address
+	Deployer common.Address // account used to deploy contracts to L2
 	genesis.L2InitializationConfig
 	genesis.OutputOracleDeployConfig
 	genesis.FaultProofDeployConfig

@@ -7,7 +7,7 @@ import (
 )
 
 type L1Deployment struct {
-	// other preinstalls maybe?
+	// preinstalls maybe?
 }
 
 type Implementations struct {
@@ -39,24 +39,24 @@ type SuperchainDeployment struct {
 }
 
 type L2Proxies struct {
-	L1CrossDomainMessengerProxy       common.Address
-	L1ERC721BridgeProxy               common.Address
-	L1StandardBridgeProxy             common.Address
-	L2OutputOracleProxy               common.Address
-	OptimismMintableERC20FactoryProxy common.Address
-	OptimismPortalProxy               common.Address
-	SystemConfigProxy                 common.Address
+	L1CrossDomainMessengerProxy       common.Address `json:"L1CrossDomainMessengerProxy"`
+	L1ERC721BridgeProxy               common.Address `json:"L1ERC721BridgeProxy"`
+	L1StandardBridgeProxy             common.Address `json:"L1StandardBridgeProxy"`
+	L2OutputOracleProxy               common.Address `json:"L2OutputOracleProxy"`
+	OptimismMintableERC20FactoryProxy common.Address `json:"OptimismMintableERC20FactoryProxy"`
+	OptimismPortalProxy               common.Address `json:"OptimismPortalProxy"`
+	SystemConfigProxy                 common.Address `json:"SystemConfigProxy"`
 
 	// Fault proofs; some of these don't have to be deployed per chain
-	AnchorStateRegistryProxy common.Address
-	DelayedWETHProxy         common.Address
-	DisputeGameFactoryProxy  common.Address
+	AnchorStateRegistryProxy common.Address `json:"AnchorStateRegistryProxy"`
+	DelayedWETHProxy         common.Address `json:"DelayedWETHProxy"`
+	DisputeGameFactoryProxy  common.Address `json:"DisputeGameFactoryProxy"`
 }
 
 type L2Deployment struct {
 	L2Proxies
 
-	ProxyAdmin common.Address
+	ProxyAdmin common.Address `json:"ProxyAdmin"`
 
 	// Safe that will own the L2 chain contracts
 	SystemOwnerSafe common.Address `json:"SystemOwnerSafe"`
