@@ -22,13 +22,6 @@ struct Deployment {
     address payable addr;
 }
 
-interface VmReadCallers is VmSafe {
-    function readCallers() external view returns (VmSafe.CallerMode callerMode, address msgSender, address txOrigin);
-    function startBroadcast(address signer) external view;
-    function stopBroadcast() external view;
-    function broadcast(address signer) external view;
-}
-
 /// @title Artifacts
 /// @notice Useful for accessing deployment artifacts from within scripts.
 ///         When a contract is deployed, call the `save` function to write its name and
@@ -37,10 +30,8 @@ interface VmReadCallers is VmSafe {
 ///      without broadcasting the interactions with the DeploymentRegistry.
 ///      The DeploymentRegistry can be overridden, to load/store deployments in a sub-context, without file IO.
 abstract contract Artifacts {
-
     /// @notice Foundry cheatcode VM.
     Vm private constant vm = Vm(address(uint160(uint256(keccak256("hevm cheat code")))));
-    VmReadCallers private constant vmSafe = VmReadCallers(address(uint160(uint256(keccak256("hevm cheat code")))));
 
     Artifacts public constant deploymentRegistry =
         Artifacts(address(uint160(uint256(keccak256(abi.encode("optimism.deploymentregistry"))))));
@@ -55,95 +46,79 @@ abstract contract Artifacts {
     }
 
     /// @notice Modifier that wraps a function to temporarily not broadcast.
-    function _noBroadcastPre() internal view returns (VmSafe.CallerMode callerMode_, address msgSender_){
+    /// Note that view() functions do not need this modifier, as static-call does not get broadcast.
+    modifier noBroadcast() {
         VmSafe.CallerMode callerMode;
         address msgSender;
-        address txOrigin;
-        (callerMode, msgSender, txOrigin) = vmSafe.readCallers();
+        (callerMode, msgSender,) = vm.readCallers();
         // If we were broadcasting, stop it.
         if (callerMode == VmSafe.CallerMode.RecurrentBroadcast || callerMode == VmSafe.CallerMode.Broadcast) {
-            vmSafe.stopBroadcast();
+            vm.stopBroadcast();
         }
-        return (callerMode, msgSender);
-    }
 
-    function _noBroadcastPost(VmSafe.CallerMode _callerMode, address _msgSender) internal view {
+        // execute the function
+        _;
+
         // Now recover the broadcasting state, if any
-        if(_callerMode == VmSafe.CallerMode.RecurrentBroadcast) {
-            vmSafe.startBroadcast(_msgSender);
+        if (callerMode == VmSafe.CallerMode.RecurrentBroadcast) {
+            vm.startBroadcast(msgSender);
         }
-        if(_callerMode == VmSafe.CallerMode.Broadcast) {
-            vmSafe.broadcast(_msgSender);
+        if (callerMode == VmSafe.CallerMode.Broadcast) {
+            vm.broadcast(msgSender);
         }
     }
 
     /// @notice Returns all of the deployments done in the current context.
-    function newDeployments() external view returns (Deployment[] memory out_) {
-        (VmSafe.CallerMode callerMode, address msgSender) = _noBroadcastPre();
-        out_ = deploymentRegistry.newDeployments();
-        _noBroadcastPost(callerMode, msgSender);
+    function newDeployments() external view returns (Deployment[] memory) {
+        return deploymentRegistry.newDeployments();
     }
 
     /// @notice Returns whether or not a particular deployment exists.
     /// @param _name The name of the deployment.
     /// @return out_ Whether the deployment exists or not.
-    function has(string memory _name) public view returns (bool out_) {
-        (VmSafe.CallerMode callerMode, address msgSender) = _noBroadcastPre();
-        out_ = deploymentRegistry.has(_name);
-        _noBroadcastPost(callerMode, msgSender);
+    function has(string memory _name) public view returns (bool) {
+        return deploymentRegistry.has(_name);
     }
 
     /// @notice Returns the address of a deployment. Also handles the predeploys.
     /// @param _name The name of the deployment.
     /// @return out_ The address of the deployment. May be `address(0)` if the deployment does not
     ///         exist.
-    function getAddress(string memory _name) public view returns (address payable out_) {
-        (VmSafe.CallerMode callerMode, address msgSender) = _noBroadcastPre();
-        out_ = deploymentRegistry.getAddress(_name);
-        _noBroadcastPost(callerMode, msgSender);
+    function getAddress(string memory _name) public view returns (address payable) {
+        return deploymentRegistry.getAddress(_name);
     }
 
     /// @notice Returns the address of a deployment and reverts if the deployment
     ///         does not exist.
     /// @return out_ The address of the deployment.
-    function mustGetAddress(string memory _name) public view returns (address payable out_) {
-        (VmSafe.CallerMode callerMode, address msgSender) = _noBroadcastPre();
-        out_ = deploymentRegistry.mustGetAddress(_name);
-        _noBroadcastPost(callerMode, msgSender);
+    function mustGetAddress(string memory _name) public view returns (address payable) {
+        return deploymentRegistry.mustGetAddress(_name);
     }
 
     /// @notice Returns a deployment that is suitable to be used to interact with contracts.
     /// @param _name The name of the deployment.
     /// @return out_ The deployment.
-    function get(string memory _name) public view returns (Deployment memory out_) {
-        (VmSafe.CallerMode callerMode, address msgSender) = _noBroadcastPre();
-        out_ = deploymentRegistry.get(_name);
-        _noBroadcastPost(callerMode, msgSender);
+    function get(string memory _name) public view returns (Deployment memory) {
+        return deploymentRegistry.get(_name);
     }
 
     /// @notice Appends a deployment to disk as a JSON deploy artifact.
     /// @param _name The name of the deployment.
     /// @param _deployed The address of the deployment.
-    function save(string memory _name, address _deployed) public {
-        (VmSafe.CallerMode callerMode, address msgSender) = _noBroadcastPre();
+    function save(string memory _name, address _deployed) public noBroadcast {
         deploymentRegistry.save(_name, _deployed);
-        _noBroadcastPost(callerMode, msgSender);
     }
 
     /// @notice Stubs a deployment retrieved through `get`.
     /// @param _name The name of the deployment.
     /// @param _addr The mock address of the deployment.
-    function prankDeployment(string memory _name, address _addr) public {
-        (VmSafe.CallerMode callerMode, address msgSender) = _noBroadcastPre();
+    function prankDeployment(string memory _name, address _addr) public noBroadcast {
         deploymentRegistry.prankDeployment(_name, _addr);
-        _noBroadcastPost(callerMode, msgSender);
     }
 
     /// @notice calls DeploymentRegistry.loadInitializedSlot
-    function loadInitializedSlot(string memory _contractName) public returns (uint8 initialized_) {
-        (VmSafe.CallerMode callerMode, address msgSender) = _noBroadcastPre();
+    function loadInitializedSlot(string memory _contractName) public noBroadcast returns (uint8 initialized_) {
         initialized_ = deploymentRegistry.loadInitializedSlot(_contractName);
-        _noBroadcastPost(callerMode, msgSender);
     }
 }
 
