@@ -3,6 +3,7 @@ package genz
 import (
 	"errors"
 	"fmt"
+	"github.com/ethereum-optimism/optimism/op-chain-ops/genesis/beacondeposit"
 	"math/big"
 
 	"github.com/holiman/uint256"
@@ -21,9 +22,9 @@ var (
 	deployConfigAddr       = common.Address(crypto.Keccak256([]byte("optimism.deployconfig"))[12:])
 	deploymentRegistryAddr = common.Address(crypto.Keccak256([]byte("optimism.deploymentregistry"))[12:])
 
-	// l2GenesisDeployer is used as tx.origin/msg.sender on L2 genesis script calls.
+	// sysGenesisDeployer is used as tx.origin/msg.sender on system genesis script calls.
 	// At the end we verify none of the deployed contracts persist (there may be temporary ones, to insert bytecode).
-	l2GenesisDeployer = common.Address(crypto.Keccak256([]byte("L2 genesis deployer"))[12:])
+	sysGenesisDeployer = common.Address(crypto.Keccak256([]byte("System genesis deployer"))[12:])
 )
 
 func Deploy(logger log.Logger, fa *foundry.ArtifactsFS, cfg *WorldConfig) (*WorldDeployment, *WorldOutput, error) {
@@ -92,8 +93,8 @@ func Deploy(logger log.Logger, fa *foundry.ArtifactsFS, cfg *WorldConfig) (*Worl
 func createL1(logger log.Logger, fa *foundry.ArtifactsFS, cfg *L1Config) *script.Host {
 	l1Context := script.Context{
 		ChainID:      cfg.ChainID,
-		Sender:       cfg.Deployer,
-		Origin:       cfg.Deployer,
+		Sender:       sysGenesisDeployer,
+		Origin:       sysGenesisDeployer,
 		FeeRecipient: common.Address{},
 		GasLimit:     script.DefaultFoundryGasLimit,
 		BlockNum:     uint64(cfg.L1GenesisBlockNumber),
@@ -109,8 +110,8 @@ func createL1(logger log.Logger, fa *foundry.ArtifactsFS, cfg *L1Config) *script
 func createL2(logger log.Logger, fa *foundry.ArtifactsFS, l2Cfg *L2Config, genesisTimestamp uint64) *script.Host {
 	l2Context := script.Context{
 		ChainID:      new(big.Int).SetUint64(l2Cfg.L2ChainID),
-		Sender:       l2GenesisDeployer,
-		Origin:       l2GenesisDeployer,
+		Sender:       sysGenesisDeployer,
+		Origin:       sysGenesisDeployer,
 		FeeRecipient: common.Address{},
 		GasLimit:     script.DefaultFoundryGasLimit,
 		BlockNum:     uint64(l2Cfg.L2GenesisBlockNumber),
@@ -125,7 +126,7 @@ func createL2(logger log.Logger, fa *foundry.ArtifactsFS, l2Cfg *L2Config, genes
 
 // initialL1 deploys basics such as preinstalls to L1  (incl. EIP-4788)
 func initialL1(l1Host *script.Host, cfg *L1Config) (*L1Deployment, error) {
-	l1Host.SetTxOrigin(cfg.Deployer)
+	l1Host.SetTxOrigin(sysGenesisDeployer)
 	// Init L2Genesis script. Yes, this is L1. Hack to deploy all preinstalls.
 	l2GenesisScript, cleanupL2Genesis, err := script.WithScript[L2GenesisScript](l1Host, "L2Genesis.s.sol", "L2Genesis")
 	if err != nil {
@@ -319,7 +320,20 @@ func completeL1(l1Host *script.Host, cfg *L1Config) (*L1Output, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to dump L1 state: %w", err)
 	}
+
+	if err := noDeployed(allocs, sysGenesisDeployer); err != nil {
+		return nil, fmt.Errorf("unexpected deployed account content by L1 genesis deployer: %w", err)
+	}
+
 	l1Genesis.Alloc = allocs.Accounts
+
+	// Insert an empty beaconchain deposit contract with valid empty-tree prestate.
+	// This is part of dev-genesis, but not part of scripts yet.
+	beaconDepositAddr := common.HexToAddress("0x1111111111111111111111111111111111111111")
+	if err := beacondeposit.InsertEmptyBeaconDepositContract(l1Genesis, beaconDepositAddr); err != nil {
+		return nil, fmt.Errorf("failed to insert beacon deposit contract into L1 dev genesis: %w", err)
+	}
+
 	return &L1Output{
 		Genesis: l1Genesis,
 	}, nil
@@ -348,15 +362,9 @@ func completeL2(l2Host *script.Host, cfg *L2Config, l1Block *types.Block, deploy
 		return nil, fmt.Errorf("failed to dump L1 state: %w", err)
 	}
 
-	// Sanity check we have no deploy output that's not meant to be there.
-	for i := uint64(0); i <= allocs.Accounts[l2GenesisDeployer].Nonce; i++ {
-		addr := crypto.CreateAddress(l2GenesisDeployer, i)
-		if _, ok := allocs.Accounts[addr]; ok {
-			return nil, fmt.Errorf("l2 genesis deployer output %s (deployed with nonce %d) was not cleaned up", addr, i)
-		}
+	if err := noDeployed(allocs, sysGenesisDeployer); err != nil {
+		return nil, fmt.Errorf("unexpected deployed account content by L2 genesis deployer: %w", err)
 	}
-	// Don't include the l2 genesis deployer account
-	delete(allocs.Accounts, l2GenesisDeployer)
 
 	l2Genesis.Alloc = allocs.Accounts
 	l2GenesisBlock := l2Genesis.ToBlock()
@@ -369,4 +377,17 @@ func completeL2(l2Host *script.Host, cfg *L2Config, l1Block *types.Block, deploy
 		Genesis:   l2Genesis,
 		RollupCfg: rollupCfg,
 	}, nil
+}
+
+func noDeployed(allocs *foundry.ForgeAllocs, deployer common.Address) error {
+	// Sanity check we have no deploy output that's not meant to be there.
+	for i := uint64(0); i <= allocs.Accounts[deployer].Nonce; i++ {
+		addr := crypto.CreateAddress(deployer, i)
+		if _, ok := allocs.Accounts[addr]; ok {
+			return fmt.Errorf("system deployer output %s (deployed with nonce %d) was not cleaned up", addr, i)
+		}
+	}
+	// Don't include the deployer account
+	delete(allocs.Accounts, deployer)
+	return nil
 }
