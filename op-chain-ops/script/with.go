@@ -2,7 +2,6 @@ package script
 
 import (
 	"fmt"
-
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
@@ -39,6 +38,9 @@ func WithScript[B any](h *Host, name string, contract string) (b *B, cleanup fun
 		return nil, nil, fmt.Errorf("failed to make bindings: %w", err)
 	}
 
+	// Scripts can be very large
+	h.EnforceMaxCodeSize(false)
+	defer h.EnforceMaxCodeSize(true)
 	// deploy the script contract
 	deployedAddr, err := h.Create(deployer, artifact.Bytecode.Object)
 	if err != nil {
@@ -47,6 +49,8 @@ func WithScript[B any](h *Host, name string, contract string) (b *B, cleanup fun
 	if deployedAddr != addr {
 		return nil, nil, fmt.Errorf("deployed to unexpected address %s, expected %s", deployedAddr, addr)
 	}
+	h.RememberSrcMap(addr, artifact, contract)
+	h.Label(addr, contract)
 	return bindings, func() {
 		h.Wipe(addr)
 	}, nil
@@ -55,15 +59,16 @@ func WithScript[B any](h *Host, name string, contract string) (b *B, cleanup fun
 // WithPrecompileAtAddress turns a struct into a precompile,
 // and inserts it as override at the given address in the host.
 // A cleanup function is returned, to remove the precompile override again.
-func WithPrecompileAtAddress[E any](h *Host, addr common.Address, elem E) (cleanup func(), err error) {
+func WithPrecompileAtAddress[E any](h *Host, addr common.Address, elem E, opts ...PrecompileOption[E]) (cleanup func(), err error) {
 	if h.HasPrecompileOverride(addr) {
 		return nil, fmt.Errorf("already have existing precompile override at %s", addr)
 	}
-	precompile, err := NewPrecompile[E](elem)
+	precompile, err := NewPrecompile[E](elem, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to construct precompile: %w", err)
 	}
 	h.SetPrecompile(addr, precompile)
+	h.Label(addr, fmt.Sprintf("%T", precompile.Precompile))
 	return func() {
 		h.SetPrecompile(addr, nil)
 	}, nil

@@ -11,24 +11,28 @@ import (
 
 	"github.com/ethereum-optimism/optimism/op-chain-ops/foundry"
 	"github.com/ethereum-optimism/optimism/op-chain-ops/genz/devkeys"
+	"github.com/ethereum-optimism/optimism/op-chain-ops/srcmap"
 	"github.com/ethereum-optimism/optimism/op-service/testlog"
 )
 
 func TestInteropDevRecipe(t *testing.T) {
 	rec := InteropDevRecipe{
-		L1ChainID:  900100,
-		L2ChainIDs: []uint64{900200, 900201},
+		L1ChainID:        900100,
+		L2ChainIDs:       []uint64{900200, 900201},
+		GenesisTimestamp: uint64(1234567),
 	}
 	hd, err := devkeys.NewMnemonicDevKeys(devkeys.TestMnemonic)
 	require.NoError(t, err)
 	worldCfg, err := rec.Build(hd)
 	require.NoError(t, err)
 
-	logger := testlog.Logger(t, log.LevelInfo)
+	logger := testlog.Logger(t, log.LevelDebug)
 	require.NoError(t, worldCfg.Check(logger))
 
 	fa := foundry.OpenArtifactsDir("../../packages/contracts-bedrock/forge-artifacts")
-	worldDeployment, worldOutput, err := Deploy(logger, fa, worldCfg)
+	srcFS := srcmap.NewSourceMapFS(os.DirFS("../../packages/contracts-bedrock"))
+
+	worldDeployment, worldOutput, err := Deploy(logger, fa, srcFS, worldCfg)
 	require.NoError(t, err)
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("  ", "  ")

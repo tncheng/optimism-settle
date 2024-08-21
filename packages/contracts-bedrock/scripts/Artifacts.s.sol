@@ -34,7 +34,7 @@ abstract contract Artifacts {
     Vm private constant vm = Vm(address(uint160(uint256(keccak256("hevm cheat code")))));
 
     Artifacts public constant deploymentRegistry =
-        Artifacts(address(uint160(uint256(keccak256(abi.encode("optimism.deploymentregistry"))))));
+        Artifacts(address(uint160(uint256(keccak256("optimism.deploymentregistry")))));
 
     function setUp() public virtual {
         if (!vm.envBool("DISABLE_DEPLOYMENT_REGISTRY")) {

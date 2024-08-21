@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"math/big"
 
-	"github.com/holiman/uint256"
-
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/params"
@@ -15,8 +13,9 @@ import (
 )
 
 type InteropDevRecipe struct {
-	L1ChainID  uint64
-	L2ChainIDs []uint64
+	L1ChainID        uint64
+	L2ChainIDs       []uint64
+	GenesisTimestamp uint64
 }
 
 func (r *InteropDevRecipe) Build(addrs devkeys.DevAddresses) (*WorldConfig, error) {
@@ -25,12 +24,17 @@ func (r *InteropDevRecipe) Build(addrs devkeys.DevAddresses) (*WorldConfig, erro
 		ChainID: new(big.Int).SetUint64(r.L1ChainID),
 		DevL1DeployConfig: genesis.DevL1DeployConfig{
 			L1BlockTime:             6,
-			L1GenesisBlockTimestamp: 0, // TODO
+			L1GenesisBlockTimestamp: hexutil.Uint64(r.GenesisTimestamp),
+			L1GenesisBlockGasLimit:  30_000_000,
 		},
 	}
 	superchainAddrs := devkeys.Scope(addrs, devkeys.SuperchainKeyDomain, l1Cfg.ChainID)
 
 	superchainDeployer, err := superchainAddrs(devkeys.DeployerRole)
+	if err != nil {
+		return nil, err
+	}
+	finalSystemOwner, err := superchainAddrs(devkeys.FinalSystemOwnerRole)
 	if err != nil {
 		return nil, err
 	}
@@ -43,8 +47,9 @@ func (r *InteropDevRecipe) Build(addrs devkeys.DevAddresses) (*WorldConfig, erro
 		return nil, err
 	}
 	superchainCfg := &SuperchainConfig{
-		ProxyAdminOwner: superchainProxyAdmin,
-		Deployer:        superchainDeployer,
+		FinalSystemOwner: finalSystemOwner,
+		ProxyAdminOwner:  superchainProxyAdmin,
+		Deployer:         superchainDeployer,
 		SuperchainL1DeployConfig: genesis.SuperchainL1DeployConfig{
 			RequiredProtocolVersion:    params.OPStackSupport,
 			RecommendedProtocolVersion: params.OPStackSupport,
@@ -54,14 +59,14 @@ func (r *InteropDevRecipe) Build(addrs devkeys.DevAddresses) (*WorldConfig, erro
 	world := &WorldConfig{
 		L1:         l1Cfg,
 		Superchain: superchainCfg,
-		L2s:        make(map[uint256.Int]*L2Config),
+		L2s:        make(map[string]*L2Config),
 	}
 	for _, l2ChainID := range r.L2ChainIDs {
 		l2Cfg, err := InteropL2DevConfig(r.L1ChainID, l2ChainID, addrs)
 		if err != nil {
 			return nil, fmt.Errorf("failed to generate L2 config for chain %d: %w", l2ChainID, err)
 		}
-		world.L2s[*uint256.NewInt(l2ChainID)] = l2Cfg
+		world.L2s[fmt.Sprintf("%d", l2ChainID)] = l2Cfg
 	}
 	return world, nil
 }
@@ -111,7 +116,8 @@ func InteropL2DevConfig(l1ChainID, l2ChainID uint64, addrs devkeys.DevAddresses)
 				FundDevAccounts: true,
 			},
 			L2GenesisBlockDeployConfig: genesis.L2GenesisBlockDeployConfig{
-				// All defaults
+				L2GenesisBlockGasLimit:      30_000_000,
+				L2GenesisBlockBaseFeePerGas: (*hexutil.Big)(big.NewInt(params.InitialBaseFee)),
 			},
 			OwnershipDeployConfig: genesis.OwnershipDeployConfig{
 				ProxyAdminOwner:  proxyAdminOwner,
@@ -174,7 +180,6 @@ func InteropL2DevConfig(l1ChainID, l2ChainID uint64, addrs devkeys.DevAddresses)
 				UseAltDA: false,
 			},
 		},
-		OutputOracleDeployConfig: genesis.OutputOracleDeployConfig{}, // disabled LOO
 		FaultProofDeployConfig: genesis.FaultProofDeployConfig{
 			UseFaultProofs:                  true,
 			FaultGameAbsolutePrestate:       common.HexToHash("0x03c7ae758795765c6664a5d39bf63841c71ff191e9189522bad8ebff5d4eca98"),

@@ -1,8 +1,6 @@
 package genz
 
 import (
-	"github.com/holiman/uint256"
-
 	"github.com/ethereum/go-ethereum/core"
 
 	"github.com/ethereum-optimism/optimism/op-node/rollup"
@@ -19,5 +17,5 @@ type L2Output struct {
 
 type WorldOutput struct {
 	L1  *L1Output
-	L2s map[uint256.Int]*L2Output
+	L2s map[string]*L2Output
 }

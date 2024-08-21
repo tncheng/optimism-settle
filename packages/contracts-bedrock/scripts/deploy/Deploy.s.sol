@@ -374,7 +374,9 @@ contract Deploy is Deployer {
         // enabled to prevent a nastier refactor to the deploy scripts. In the future, the L2OutputOracle will be
         // removed. If fault proofs are not enabled, the DisputeGameFactory proxy will be unused.
         deployERC1967Proxy("DisputeGameFactoryProxy");
-        deployERC1967Proxy("L2OutputOracleProxy");
+        if (!vm.envOr("EXPERIMENTAL_SKIP_L2OUTPUTORACLE", false)) {
+            deployERC1967Proxy("L2OutputOracleProxy");
+        }
         deployERC1967Proxy("DelayedWETHProxy");
         deployERC1967Proxy("PermissionedDelayedWETHProxy");
         deployERC1967Proxy("AnchorStateRegistryProxy");
@@ -391,14 +393,20 @@ contract Deploy is Deployer {
         deployL1StandardBridge();
         deployL1ERC721Bridge();
         deployOptimismPortal();
-        deployL2OutputOracle();
+        if (!vm.envOr("EXPERIMENTAL_SKIP_L2OUTPUTORACLE", false)) {
+            deployL2OutputOracle();
+        }
         // Fault proofs
         deployOptimismPortal2();
         deployDisputeGameFactory();
-        deployDelayedWETH();
+        if(!vm.envOr("SUPERCHAIN_IMPLEMENTATIONS_WORKAROUND", false)) { // deployDelayedWETH bytecode depends on deploy config
+            deployDelayedWETH();
+        }
         deployPreimageOracle();
         deployMips();
-        deployAnchorStateRegistry();
+        if(!vm.envOr("SUPERCHAIN_IMPLEMENTATIONS_WORKAROUND", false)) { // deployAnchorStateRegistry depends on DisputeGameFactoryProxy
+            deployAnchorStateRegistry();
+        }
     }
 
     /// @notice Initialize all of the implementations
@@ -418,7 +426,9 @@ contract Deploy is Deployer {
         initializeL1ERC721Bridge();
         initializeOptimismMintableERC20Factory();
         initializeL1CrossDomainMessenger();
-        initializeL2OutputOracle();
+        if (!vm.envOr("EXPERIMENTAL_SKIP_L2OUTPUTORACLE", false)) {
+            initializeL2OutputOracle();
+        }
         initializeDisputeGameFactory();
         initializeDelayedWETH();
         initializePermissionedDelayedWETH();
@@ -504,7 +514,9 @@ contract Deploy is Deployer {
     /// @notice Deploy the AddressManager
     function deployAddressManager() public broadcast returns (address addr_) {
         console.log("Deploying AddressManager");
+        console.log("deploying as", msg.sender);
         AddressManager manager = new AddressManager();
+        console.log("manager owner is", manager.owner());
         require(manager.owner() == msg.sender);
 
         save("AddressManager", address(manager));

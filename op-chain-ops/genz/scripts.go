@@ -7,10 +7,19 @@ type DeployScript struct {
 	SetupSuperchain func() error
 
 	// technically still part of setupOpChain, but we deploy them once, and share them, OPSM style.
+	// Run this with env "SUPERCHAIN_IMPLEMENTATIONS_WORKAROUND"
+	// to not run deployAnchorStateRegistry and deployDelayedWETH.
 	DeployImplementations func() error
 
-	// setupOpChain
+	// setupOpChain prep, not shared with superchain here, unique per L2
+	DeployAddressManager        func() error
+	DeployProxyAdmin            func() error
+	TransferProxyAdminOwnership func() error
+
+	// setupOpChain core
 	DeployProxies             func() error
+	DeployDelayedWETH         func() error // work around, address depends on config
+	DeployAnchorStateRegistry func() error // work around, depends on a proxy
 	InitializeImplementations func() error
 
 	// FP functions
@@ -23,6 +32,6 @@ type DeployScript struct {
 }
 
 type L2GenesisScript struct {
-	RunWithAllUpgrades func() error
-	SetPreinstalls     func() error
+	RunWithEnv     func() error
+	SetPreinstalls func() error
 }

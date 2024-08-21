@@ -1,8 +1,6 @@
 package genz
 
 import (
-	"github.com/holiman/uint256"
-
 	"github.com/ethereum/go-ethereum/common"
 )
 
@@ -16,7 +14,7 @@ type Implementations struct {
 	L1StandardBridge             common.Address `json:"L1StandardBridge"`
 	L2OutputOracle               common.Address `json:"L2OutputOracle"`
 	OptimismMintableERC20Factory common.Address `json:"OptimismMintableERC20Factory"`
-	OptimismPortal               common.Address `json:"OptimismPortal"`
+	OptimismPortal2              common.Address `json:"OptimismPortal2"`
 	SystemConfig                 common.Address `json:"SystemConfig"`
 
 	DisputeGameFactory common.Address `json:"DisputeGameFactory"`
@@ -47,6 +45,11 @@ type L2Proxies struct {
 	OptimismPortalProxy               common.Address `json:"OptimismPortalProxy"`
 	SystemConfigProxy                 common.Address `json:"SystemConfigProxy"`
 
+	// This implementation deployment depends on DisputeGameFactoryProxy
+	AnchorStateRegistry common.Address `json:"AnchorStateRegistry"`
+	// DelayedWETH bytecode is parameterized with deploy-config data
+	DelayedWETH common.Address `json:"DelayedWETH"`
+
 	// Fault proofs; some of these don't have to be deployed per chain
 	AnchorStateRegistryProxy common.Address `json:"AnchorStateRegistryProxy"`
 	DelayedWETHProxy         common.Address `json:"DelayedWETHProxy"`
@@ -63,7 +66,7 @@ type L2Deployment struct {
 }
 
 type WorldDeployment struct {
-	L1         *L1Deployment
-	Superchain *SuperchainDeployment
-	L2s        map[uint256.Int]*L2Deployment
+	L1         *L1Deployment            `json:"L1"`
+	Superchain *SuperchainDeployment    `json:"Superchain"`
+	L2s        map[string]*L2Deployment `json:"L2s"`
 }

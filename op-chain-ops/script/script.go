@@ -1,14 +1,12 @@
 package script
 
 import (
+	"bytes"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math/big"
-
-	"github.com/holiman/uint256"
-
+	"github.com/ethereum-optimism/optimism/op-chain-ops/srcmap"
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
@@ -24,6 +22,8 @@ import (
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/triedb"
 	"github.com/ethereum/go-ethereum/triedb/hashdb"
+	"github.com/holiman/uint256"
+	"math/big"
 
 	"github.com/ethereum-optimism/optimism/op-chain-ops/foundry"
 )
@@ -44,9 +44,17 @@ type Prank struct {
 
 // CallFrame encodes the scope context of the current call
 type CallFrame struct {
-	Depth  int
-	Opener vm.OpCode
-	Ctx    *vm.ScopeContext
+	Depth int
+
+	LastOp vm.OpCode
+	LastPC uint64
+
+	// Reverts often happen in generated code.
+	// We want to fallback to logging the source-map position of
+	// the non-generated code, i.e. the origin of the last successful jump.
+	LastJumpPC uint64
+
+	Ctx *vm.ScopeContext
 
 	// Prank overrides the msg.sender, and optionally the origin.
 	// Forge script does not support nested pranks on the same call-depth.
@@ -78,17 +86,27 @@ type Host struct {
 
 	envVars map[string]string
 	labels  map[common.Address]string
+
+	// srcFS enables src-map loading;
+	// this is a bit more expensive, but provides useful debug information.
+	// src-maps are disabled if this is nil.
+	srcFS   *srcmap.SourceMapFS
+	srcMaps map[common.Address]*srcmap.SourceMap
 }
 
 // NewHost creates a Host that can load contracts from the given Artifacts FS,
 // and with an EVM initialized to the given executionContext.
-func NewHost(logger log.Logger, fs *foundry.ArtifactsFS, executionContext Context) *Host {
+// Optionally src-map loading may be enabled, by providing a non-nil srcFS to read sources from.
+func NewHost(logger log.Logger, fs *foundry.ArtifactsFS, srcFS *srcmap.SourceMapFS, executionContext Context) *Host {
 	h := &Host{
 		log:              logger,
 		af:               fs,
 		serializerStates: make(map[string]json.RawMessage),
 		envVars:          make(map[string]string),
 		labels:           make(map[common.Address]string),
+		precompiles:      make(map[common.Address]vm.PrecompiledContract),
+		srcFS:            srcFS,
+		srcMaps:          make(map[common.Address]*srcmap.SourceMap),
 	}
 
 	// Init a default chain config, with all the mainnet L1 forks activated
@@ -185,6 +203,7 @@ func NewHost(logger log.Logger, fs *foundry.ArtifactsFS, executionContext Contex
 		NoBaseFee:           true,
 		Tracer:              trHooks,
 		PrecompileOverrides: h.getPrecompile,
+		CallerOverride:      h.handleCaller,
 	}
 
 	h.env = vm.NewEVM(blockContext, txContext, h.state, h.chainCfg, vmCfg)
@@ -203,6 +222,7 @@ func (h *Host) EnableCheats() error {
 	// We need to insert some placeholder code to prevent it from aborting calls.
 	// Emulates Forge script: https://github.com/foundry-rs/foundry/blob/224fe9cbf76084c176dabf7d3b2edab5df1ab818/crates/evm/evm/src/executors/mod.rs#L108
 	h.state.SetCode(VMAddr, []byte{0x00})
+	h.precompiles[VMAddr] = h.cheatcodes
 
 	consolePrecompile, err := NewPrecompile[*ConsolePrecompile](&ConsolePrecompile{
 		logger: h.log,
@@ -212,6 +232,7 @@ func (h *Host) EnableCheats() error {
 		return fmt.Errorf("failed to init console precompile: %w", err)
 	}
 	h.console = consolePrecompile
+	h.precompiles[ConsoleAddr] = h.console
 	// The Console precompile does not need bytecode,
 	// calls all go through a console lib, which avoids the EXTCODESIZE.
 	return nil
@@ -236,7 +257,29 @@ func (h *Host) LoadContract(artifactName, contractName string) (common.Address, 
 	if err != nil {
 		return common.Address{}, fmt.Errorf("failed to load %s / %s: %w", artifactName, contractName, err)
 	}
-	return h.Create(h.TxOrigin(), artifact.Bytecode.Object)
+	addr, err := h.Create(h.TxOrigin(), artifact.Bytecode.Object)
+	if err != nil {
+		return common.Address{}, err
+	}
+	h.RememberSrcMap(addr, artifact, contractName)
+	return addr, nil
+}
+
+func (h *Host) RememberSrcMap(addr common.Address, artifact *foundry.Artifact, contract string) {
+	if h.srcFS == nil {
+		return
+	}
+	code := h.state.GetCode(addr)
+	if !bytes.Equal(code, artifact.DeployedBytecode.Object) {
+		h.log.Warn("src map warning: state bytecode does not match artifact deployed bytecode", "addr", addr)
+	}
+
+	srcMap, err := h.srcFS.SourceMap(artifact, contract)
+	if err != nil {
+		h.log.Warn("failed to load srcmap", "addr", addr, "err", err)
+		return
+	}
+	h.srcMaps[addr] = srcMap
 }
 
 // Create a contract with unlimited gas, and 0 ETH value.
@@ -246,7 +289,11 @@ func (h *Host) Create(from common.Address, initCode []byte) (common.Address, err
 	ret, addr, _, err := h.env.Create(vm.AccountRef(from),
 		initCode, DefaultFoundryGasLimit, uint256.NewInt(0))
 	if err != nil {
-		return common.Address{}, fmt.Errorf("failed to create contract, return: %x, err: %w", ret, err)
+		retStr := fmt.Sprintf("%x", ret)
+		if len(retStr) > 20 {
+			retStr = retStr[:20] + "..."
+		}
+		return common.Address{}, fmt.Errorf("failed to create contract, return: %s, err: %w", retStr, err)
 	}
 	return addr, nil
 }
@@ -263,61 +310,50 @@ func (h *Host) Wipe(addr common.Address) {
 
 // getPrecompile overrides any accounts during runtime, to insert special precompiles, if activated.
 func (h *Host) getPrecompile(rules params.Rules, original vm.PrecompiledContract, addr common.Address) vm.PrecompiledContract {
-	switch addr {
-	case VMAddr:
-		return h.cheatcodes // nil if cheats are not enabled
-	case ConsoleAddr:
-		return h.console // nil if cheats are not enabled
-	default:
-		if p, ok := h.precompiles[addr]; ok {
-			return p
-		}
-		return original
+	if p, ok := h.precompiles[addr]; ok {
+		return p
 	}
+	return original
 }
 
 // SetPrecompile inserts a precompile at the given address.
 // If the precompile is nil, it removes the precompile override from that address, and wipes the account.
 func (h *Host) SetPrecompile(addr common.Address, precompile vm.PrecompiledContract) {
 	if precompile == nil {
+		h.log.Debug("removing precompile", "addr", addr)
 		delete(h.precompiles, addr)
 		h.Wipe(addr)
 		return
 	}
+	h.log.Debug("adding precompile", "addr", addr)
 	h.precompiles[addr] = precompile
 	// insert non-empty placeholder bytecode, so EXTCODESIZE checks pass
 	h.state.SetCode(addr, []byte{0})
 }
 
 func (h *Host) HasPrecompileOverride(addr common.Address) bool {
-	switch addr {
-	case VMAddr:
-		return h.cheatcodes != nil
-	case ConsoleAddr:
-		return h.console != nil
-	default:
-		_, ok := h.precompiles[addr]
-		return ok
-	}
+	_, ok := h.precompiles[addr]
+	return ok
 }
 
 // onExit is a trace-hook, which we use to maintain an accurate view of functions, and log any revert warnings.
 func (h *Host) onExit(depth int, output []byte, gasUsed uint64, err error, reverted bool) {
 	// Note: onExit runs also when going deeper, exiting the context into a nested context.
 	addr := h.SelfAddress()
-	h.unwindCallstack(depth)
 	if reverted {
+		h.LogCallStack()
 		if msg, revertInspectErr := abi.UnpackRevert(output); revertInspectErr == nil {
-			h.log.Warn("Revert", "addr", addr, "err", err, "revertMsg", msg)
+			h.log.Warn("Revert", "addr", addr, "err", err, "revertMsg", msg, "depth", depth)
 		} else {
-			h.log.Warn("Revert", "addr", addr, "err", err, "revertData", hexutil.Bytes(output))
+			h.log.Warn("Revert", "addr", addr, "err", err, "revertData", hexutil.Bytes(output), "depth", depth)
 		}
 	}
+	h.unwindCallstack(depth)
 }
 
 // onFault is a trace-hook, catches things more generic than regular EVM reverts.
 func (h *Host) onFault(pc uint64, op byte, gas, cost uint64, scope tracing.OpContext, depth int, err error) {
-	h.log.Warn("Fault", "addr", scope.Address(), "err", err)
+	h.log.Warn("Fault", "addr", scope.Address(), "err", err, "depth", depth)
 }
 
 // unwindCallstack is a helper to remove call-stack entries.
@@ -352,27 +388,23 @@ func (h *Host) onOpcode(pc uint64, op byte, gas, cost uint64, scope tracing.OpCo
 	// We do this here, instead of onEnter, to capture an initialized scope.
 	if len(h.callStack) == 0 || h.callStack[len(h.callStack)-1].Depth < depth {
 		h.callStack = append(h.callStack, CallFrame{
-			Depth:  depth,
-			Opener: vm.OpCode(op),
-			Ctx:    scopeCtx,
+			Depth:      depth,
+			LastOp:     vm.OpCode(op),
+			LastPC:     pc,
+			LastJumpPC: pc,
+			Ctx:        scopeCtx,
 		})
-		// apply prank, if parent call-frame set up a prank
-		if len(h.callStack) > 1 {
-			parentCallFrame := h.callStack[len(h.callStack)-2]
-			if parentCallFrame.Prank != nil && scope.Address() != VMAddr { // pranks do not apply to the cheatcode precompile
-				if parentCallFrame.Prank.Sender != nil {
-					scopeCtx.Contract.CallerAddress = *parentCallFrame.Prank.Sender
-				}
-				if parentCallFrame.Prank.Origin != nil {
-					h.env.TxContext.Origin = *parentCallFrame.Prank.Origin
-				}
-			}
-		}
 	}
 	// Sanity check that top of the call-stack matches the scope context now
 	if len(h.callStack) == 0 || h.callStack[len(h.callStack)-1].Ctx != scopeCtx {
 		panic("scope context changed without call-frame pop/push")
 	}
+	cf := &h.callStack[len(h.callStack)-1]
+	if vm.OpCode(op) == vm.JUMPDEST { // remember the last PC before successful jump
+		cf.LastJumpPC = cf.LastPC
+	}
+	cf.LastOp = vm.OpCode(op)
+	cf.LastPC = pc
 }
 
 // onStorageChange is a trace-hook to capture state changes
@@ -389,6 +421,40 @@ func (h *Host) onLog(ev *types.Log) {
 	}
 	logger.Debug("log event", "data", hexutil.Bytes(ev.Data))
 	// future log recording
+}
+
+type PrankRef struct {
+	prank common.Address
+	ref   vm.ContractRef
+}
+
+func (p *PrankRef) Address() common.Address {
+	return p.prank
+}
+
+// Value returns the value send into this contract context.
+// The delegate call tracer implicitly relies on this being implemented on ContractRef
+func (p *PrankRef) Value() *uint256.Int {
+	return p.ref.(interface{ Value() *uint256.Int }).Value()
+}
+
+func (h *Host) handleCaller(caller vm.ContractRef) vm.ContractRef {
+	// apply prank, if top call-frame had set up a prank
+	if len(h.callStack) > 0 {
+		parentCallFrame := h.callStack[len(h.callStack)-1]
+		if parentCallFrame.Prank != nil && caller.Address() != VMAddr { // pranks do not apply to the cheatcode precompile
+			if parentCallFrame.Prank.Sender != nil {
+				return &PrankRef{
+					prank: *parentCallFrame.Prank.Sender,
+					ref:   caller,
+				}
+			}
+			if parentCallFrame.Prank.Origin != nil {
+				h.env.TxContext.Origin = *parentCallFrame.Prank.Origin
+			}
+		}
+	}
+	return caller
 }
 
 // CurrentCall returns the top of the callstack. Or zeroed if there was no call frame yet.
@@ -436,6 +502,7 @@ func (h *Host) Prank(msgSender *common.Address, txOrigin *common.Address, repeat
 			return errors.New("you have an active prank; broadcasting and pranks are not compatible")
 		}
 	}
+	h.log.Warn("prank", "sender", msgSender)
 	cf.Prank = &Prank{
 		Sender:     msgSender,
 		Origin:     txOrigin,
@@ -535,9 +602,8 @@ func (h *Host) StateDump() (*foundry.ForgeAllocs, error) {
 	// Sanity check we have no lingering scripts.
 	for i := uint64(0); i <= allocs.Accounts[ScriptDeployer].Nonce; i++ {
 		scriptAddr := crypto.CreateAddress(ScriptDeployer, i)
-		if _, ok := allocs.Accounts[scriptAddr]; ok {
-			return nil, fmt.Errorf("script %s (deployed with nonce %d) was not cleaned up", scriptAddr, i)
-		}
+		h.log.Info("removing script from state-dump", "addr", scriptAddr, "label", h.labels[scriptAddr])
+		delete(allocs.Accounts, scriptAddr)
 	}
 
 	// Remove the script deployer from the output
@@ -568,4 +634,33 @@ func (h *Host) ScriptBackendFn(to common.Address) CallBackendFn {
 		ret, _, err := h.Call(h.env.TxContext.Origin, to, data, DefaultFoundryGasLimit, uint256.NewInt(0))
 		return ret, err
 	}
+}
+
+func (h *Host) EnforceMaxCodeSize(v bool) {
+	h.env.Config.NoMaxCodeSize = !v
+}
+
+func (h *Host) LogCallStack() {
+	for _, cf := range h.callStack {
+		callsite := ""
+		if srcMap, ok := h.srcMaps[cf.Ctx.Address()]; ok {
+			callsite = srcMap.FormattedInfo(cf.LastPC)
+			if callsite == "unknown:0:0" {
+				callsite = srcMap.FormattedInfo(cf.LastJumpPC)
+			}
+		}
+		input := cf.Ctx.CallInput()
+		byte4 := ""
+		if len(input) >= 4 {
+			byte4 = fmt.Sprintf("0x%x", input[:4])
+		}
+		h.log.Debug("callframe", "depth", cf.Depth, "input", hexutil.Bytes(input), "pc", cf.LastPC, "op", cf.LastOp)
+		h.log.Warn("callframe", "depth", cf.Depth, "byte4", byte4,
+			"addr", cf.Ctx.Address(), "callsite", callsite, "label", h.labels[cf.Ctx.Address()])
+	}
+}
+
+func (h *Host) Label(addr common.Address, label string) {
+	h.log.Debug("labeling", "addr", addr, "label", label)
+	h.labels[addr] = label
 }

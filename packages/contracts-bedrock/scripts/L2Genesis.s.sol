@@ -122,6 +122,11 @@ contract L2Genesis is Deployer {
         runWithOptions(OutputMode.ALL, LATEST_FORK, artifactDependencies());
     }
 
+    /// @notice This is used by new experimental interop deploy tooling.
+    function runWithEnv() public {
+        runWithOptions(OutputMode.NONE, Config.fork(), artifactDependencies());
+    }
+
     /// @notice This is used by foundry tests to enable the latest fork with the
     ///         given L1 dependencies.
     function runWithLatestLocal(L1Dependencies memory _l1Dependencies) public {

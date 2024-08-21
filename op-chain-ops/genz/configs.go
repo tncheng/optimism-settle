@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"math/big"
 
-	"github.com/holiman/uint256"
-
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/log"
 
@@ -31,7 +29,8 @@ type SuperchainConfig struct {
 
 	// TODO address manager owner, proxy admin owner?
 
-	ProxyAdminOwner common.Address
+	FinalSystemOwner common.Address
+	ProxyAdminOwner  common.Address
 
 	genesis.SuperchainL1DeployConfig
 }
@@ -52,7 +51,6 @@ func (c *SuperchainConfig) Check(log log.Logger) error {
 type L2Config struct {
 	Deployer common.Address // account used to deploy contracts to L2
 	genesis.L2InitializationConfig
-	genesis.OutputOracleDeployConfig
 	genesis.FaultProofDeployConfig
 }
 
@@ -63,8 +61,8 @@ func (c *L2Config) Check(log log.Logger) error {
 	if err := c.L2InitializationConfig.Check(log); err != nil {
 		return err
 	}
-	if err := c.OutputOracleDeployConfig.Check(log); err != nil {
-		return err
+	if !c.FaultProofDeployConfig.UseFaultProofs {
+		return errors.New("must set UseFaultProofs: legacy output oracle is not supported")
 	}
 	if err := c.FaultProofDeployConfig.Check(log); err != nil {
 		return err
@@ -75,7 +73,7 @@ func (c *L2Config) Check(log log.Logger) error {
 type WorldConfig struct {
 	L1         *L1Config
 	Superchain *SuperchainConfig
-	L2s        map[uint256.Int]*L2Config
+	L2s        map[string]*L2Config
 }
 
 func (c *WorldConfig) Check(log log.Logger) error {
@@ -86,8 +84,8 @@ func (c *WorldConfig) Check(log log.Logger) error {
 		return fmt.Errorf("invalid Superchain config: %w", err)
 	}
 	for l2ChainID, l2Cfg := range c.L2s {
-		if err := l2Cfg.Check(log.New("l2", l2ChainID)); err != nil {
-			return fmt.Errorf("invalid L2 (chain ID %s) config: %w", &l2ChainID, err)
+		if err := l2Cfg.Check(log.New("l2", &l2ChainID)); err != nil {
+			return fmt.Errorf("invalid L2 (chain ID %s) config: %w", l2ChainID, err)
 		}
 	}
 	return nil
